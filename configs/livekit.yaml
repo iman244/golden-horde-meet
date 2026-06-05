@@ -1,0 +1,34 @@
+port: 7880
+log_level: info
+
+redis:
+  address: "redis:6379"
+  password: "qwer123456"
+  db: 0
+
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+  port_range_start: 50000
+  port_range_end: 50050
+  turn_servers:
+     - host: shaman.golden-horde.ir
+       port: 3478
+       # tls, tcp, or udp
+       protocol: udp
+  #     # Shared secret for TURN server authentication
+       secret: qwer123456
+       ttl: 14400 # seconds
+  #     # Insecure username/password authentication
+  #     username: ""
+  #     credential: ""
+
+keys:
+  devkey: "mylongdevsecretstringthatishigherthan32chars123"
+
+#turn:
+#  enabled: true
+#  domain: 194.60.231.201
+#  port: 3478
+#  tls_port: 443

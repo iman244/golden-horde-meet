@@ -1,0 +1,171 @@
+version: "3.9"
+
+networks:
+  web:
+    external: true
+  livekit-internal:
+    driver: overlay
+    internal: true
+
+volumes:
+  traefik-letsencrypt:
+  redis-data:
+
+secrets:
+  livekit-api-key:
+    external: true
+  livekit-api-secret:
+    external: true
+
+configs:
+  turnserver:
+    file: ./configs/turnserver.conf
+
+services:
+  traefik:
+    image: traefik:3.6.7
+    user: root
+    command:
+      # Docker provider
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+
+      # EntryPoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+
+      # Let's Encrypt (HTTP-01)
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=imansharifi244@gmail.com"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+
+      # Dashboard (TEMP – remove or secure later)
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+
+      # Logs (optional but useful)
+      - "--log.level=INFO"
+
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # dashboard
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-letsencrypt:/letsencrypt
+
+    networks:
+      - web
+
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --requirepass "qwer123456"
+    networks:
+      - livekit-internal
+    volumes:
+      - redis-data:/data
+    deploy:
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: always
+
+  livekit:
+    image: livekit/livekit-server:latest
+    command: ["--config", "/etc/livekit.yaml"]
+    networks:
+      - web
+      - livekit-internal
+    ports:
+      # - "7880:7880/tcp"
+      - "7881:7881/tcp"
+      - "7882:7882/udp"
+    volumes:
+      - type: bind
+        source: ./configs/livekit.yaml
+        target: /etc/livekit.yaml
+        read_only: true
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+      # HTTP router (ACME validation)
+      - "traefik.http.routers.livekit-http.rule=Host(`shaman.golden-horde.ir`)"
+      - "traefik.http.routers.livekit-http.entrypoints=web"
+      - "traefik.http.routers.livekit-http.middlewares=redirect-to-https"
+
+      # HTTPS router
+      - "traefik.http.routers.livekit-https.rule=Host(`shaman.golden-horde.ir`)"
+      - "traefik.http.routers.livekit-https.entrypoints=websecure"
+      - "traefik.http.routers.livekit-https.tls=true"
+      - "traefik.http.routers.livekit-https.tls.certresolver=letsencrypt"
+
+      # Backend
+      - "traefik.http.services.livekit.loadbalancer.server.port=7880"
+
+      - "traefik.docker.network=web"
+
+
+  meet:
+    image: golden-horde-meet-nextjs:1.03
+    networks:
+      - web
+    secrets:
+      - "livekit-api-key"
+      - "livekit-api-secret"
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+
+      # HTTP → required for ACME
+      - "traefik.http.routers.meet-http.rule=Host(`golden-horde.ir`)"
+      - "traefik.http.routers.meet-http.entrypoints=web"
+      - "traefik.http.routers.meet-http.middlewares=redirect-to-https"
+
+      # HTTPS
+      - "traefik.http.routers.meet-https.rule=Host(`golden-horde.ir`)"
+      - "traefik.http.routers.meet-https.entrypoints=websecure"
+      - "traefik.http.routers.meet-https.tls=true"
+      - "traefik.http.routers.meet-https.tls.certresolver=letsencrypt"
+
+      # Service backend
+      - "traefik.http.services.meet.loadbalancer.server.port=3000"
+
+      # Swarm network
+      - "traefik.docker.network=web"
+    environment:
+      LIVEKIT_API_KEY_FILE: "/run/secrets/livekit-api-key"
+      LIVEKIT_API_SECRET_FILE: "/run/secrets/livekit-api-secret"
+      LIVEKIT_URL: "wss://shaman.golden-horde.ir"
+
+  coturn:
+    image: coturn/coturn
+    configs:
+      - source: turnserver
+        target: /etc/coturn/turnserver.conf
+        mode: 0444
+    network_mode: host          # ← Critical: bypass Docker NAT for TURN
+    cap_add:
+      - NET_ADMIN 
+#    ports:
+#      - "3478:3478"
+#      - "3478:3478/udp"
+#      - "5349:5349"
+#      - "5349:5349/udp"
+#      - "50000-50050:50000-50050/udp"
